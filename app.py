@@ -19,23 +19,36 @@ GAME_STATE = {
     "bomb": 0,
     "used_bombs": set(),    # 确保每一局数字不重复
     "players": [],          # 存储结构: [{"uid": 123, "name": "xxx", "hp": 3, "num_id": 1}]
-    "turn_idx": 0           # 当前该轮到几号玩家发言
+    "turn_idx": 0,          # 当前该轮到几号玩家发言 (索引)
+    "group_chat_id": None   # 记录当前游戏群组ID
 }
 
 def get_join_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("💀 签下生死状 · 报名", callback_data="btn_join")]])
 
+# 重置游戏状态
+def reset_game():
+    GAME_STATE["status"] = "idle"
+    GAME_STATE["capacity"] = 0
+    GAME_STATE["min"], GAME_STATE["max"] = 1, 100
+    GAME_STATE["bomb"] = 0
+    GAME_STATE["players"] = []
+    GAME_STATE["turn_idx"] = 0
+    # used_bombs 不重置，保留全局去重
+
 # 2. 只有管理员可以运行的命令入口
 async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
-        return # 严格限制：其他人运行直接无视
+        return 
 
     if GAME_STATE["status"] != "idle":
         await update.message.reply_text("⚠️ 战场硝烟未散，上一局大逃杀还在继续，无法开启新房间！")
         return
 
     GAME_STATE["status"] = "waiting_capacity"
+    GAME_STATE["group_chat_id"] = update.effective_chat.id # 记录游戏发生的群组
+    
     await update.message.reply_text(
         "👁‍🗨 **【最高主宰令】数字炸弹生死战已就绪！**\n"
         "请上帝输入本局要清洗的玩家人数：\n"
@@ -73,7 +86,7 @@ async def handle_admin_commands(update: Update, context: ContextTypes.DEFAULT_TY
                 reply_markup=get_join_keyboard()
             )
 
-# 4. 按钮报名回调
+# 4. 按钮报名回调与游戏启动
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -94,16 +107,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("❌ 满员！地狱的大门已经对你关闭。")
         return
 
-    # 录入玩家
+    # 录入玩家 (初始HP: 3)
     GAME_STATE["players"].append({"uid": user_id, "name": username, "hp": 3, "num_id": current_count})
     
-    # 严格格式在群里展示玩家
     await context.bot.send_message(
         chat_id=chat_id, 
         text=f"🩸 玩家{current_count}：{username} 已签下生死状！"
     )
     
-    # 核心需求：每有一位玩家加入，立刻发私信给管理员(8267239773)
     try:
         await context.bot.send_message(
             chat_id=ADMIN_ID,
@@ -127,148 +138,147 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(GAME_STATE["used_bombs"]) >= 95:
                 GAME_STATE["used_bombs"].clear()
 
-        # 核心需求：给所有参赛玩家私信发送他们本局的号码
+        # 私信发送号码
         for p in GAME_STATE["players"]:
             try:
                 await context.bot.send_message(
                     chat_id=p["uid"],
-                    text=f"💀 【死亡序列】你在本局中的发言号码是： 👉 【 {p['num_id']}号 】 👈\n盯紧群里的局势，死神点到你的号码时再打字输入！提前或延误都将遭到抹杀！"
+                    text=f"💀 【死亡序列】你在本局中的发言号码是： 👉 【 {p['num_id']}号 】 👈\n"
+                         f"盯紧群里的局势，死神点到你的号码时再打字输入！提前或延误都将遭到抹杀！"
                 )
             except Exception:
-                await context.bot.send_message(chat_id=chat_id, text=f"⚠️ 处决警告：玩家【{p['name']}】未激活机器人 @jieflqbot ，死亡号码无法送达！")
+                await context.bot.send_message(
+                    chat_id=chat_id, 
+                    text=f"⚠️ 处决警告：玩家【{p['name']}】未激活机器人 @jieflqbot ，死亡号码无法送达！"
+                )
 
-        # 上帝视角核心需求：私信发给管理员所有玩家号码配置以及本局炸弹答案
-        admin_report = f"👁‍🗨 **【全知全能·上帝主控台】**\n\n💣 本局核心爆破核心数值： 👉 `{GAME_STATE['bomb']}` 👈\n\n📊 **卑微的牺牲者名单：**\n"
-        for p in GAME_STATE["players"]:
-            admin_report += f"• 玩家{p['num_id']}号 ： {p['name']} (ID: {p['uid']})\n"
-        
-        try:
-            await context.bot.send_message(chat_id=ADMIN_ID, text=admin_report, parse_mode="Markdown")
-        except Exception:
-            pass
-
-        # 群内战役宣布爆发
+        # 播报第一回合
+        current_player = GAME_STATE["players"][GAME_STATE["turn_idx"]]
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"⚔️ **牢笼已锁死！大逃杀正式爆发！** ⚔️\n"
-                 f"死亡代码已在暗中发放。谁敢越界或者插队，将被系统瞬间清洗！\n"
-                 f"🚨 **初始安全防线：`1 ~ 100`**\n"
-                 f"⏱ 窒息开始！请 【1号】 玩家在群里打出第一个数字！其他人的任何声音一概视为无效！"
+            text=f"🏁 **大逃杀正式开始！死神之轮启动！**\n\n"
+                 f"当前数字范围：👉 **{GAME_STATE['min']} ~ {GAME_STATE['max']}** 👈\n"
+                 f"💀 轮到玩家：**{current_player['num_id']}号【{current_player['name']}】** (❤️ HP: {current_player['hp']})\n"
+                 f"❗ 请直接在群里发送你猜测的纯数字！"
         )
 
-# 5. 监听群聊内的抢答（高智商轮流控场逻辑）
-async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
+# 5. 核心：游戏运行中的报数监听逻辑
+async def handle_game_play(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 严格锁死：只在进行游戏时，且在特定群组中监听
+    if GAME_STATE["status"] != "playing" or update.effective_chat.id != GAME_STATE["group_chat_id"]:
+        return
+
     user_id = update.effective_user.id
     text = update.message.text.strip()
-    
-    if GAME_STATE["status"] != "playing": return
-    if not text.isdigit(): return # 只听纯数字
 
-    # 找出当前有哪些人还活着
-    alive_players = [p for p in GAME_STATE["players"] if p["hp"] > 0]
-    current_turn_player = alive_players[GAME_STATE["turn_idx"] % len(alive_players)]
-
-    # 严格拦截非本回合玩家发言
-    if user_id != current_turn_player["uid"]:
-        return 
+    # 如果不是纯数字输入，直接无视（不属于游戏竞猜）
+    if not text.isdigit():
+        return
 
     guess = int(text)
-    player = current_turn_player
-    bomb = GAME_STATE["bomb"]
-    
-    # 🌟 极度紧绷的文字仪式感！
-    suspense_msg = await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"⚠️ **【极限核验】** 玩家 【{player['num_id']}号：{player['name']}】 孤注一掷！打出了数字 `{guess}`！\n"
-             f"🚨 起爆装置正将该数值强行注入…… 核心齿轮咬合……\n"
-             f"🔥 `🔊 ［ 滋滋滋…… 3.. 2.. 1.. ］屏住呼吸，静候判决！`"
-    )
-    
-    # 静默 1.5 秒，让群友彻底抓狂
-    await asyncio.sleep(1.5)
-    
-    log_msg = ""
-    # 判定结果
-    if guess == bomb or guess <= GAME_STATE["min"] or guess >= GAME_STATE["max"]:
-        reason = f"正好踩中了死神设定的引爆数字 `{bomb}` ！💥" if guess == bomb else f"愚蠢地打出了安全圈 `{GAME_STATE['min']}~{GAME_STATE['max']}` 之外的自杀数值！⚡"
-        player["hp"] -= 1
-        log_msg = f"💀 **HISS——！！！ 轰隆！！！**\n【玩家{player['num_id']}号：{player['name']}】{reason}\n" \
-                  f"🔥 汹涌的火海瞬间将你吞噬！**你的生命值被狠狠扣除 1 点！**\n"
-        
-        # 踩雷后重新生成新一局的数字，重置范围，继续大逃杀
-        while True:
-            new_bomb = random.randint(2, 99)
-            if new_bomb not in GAME_STATE["used_bombs"]:
-                GAME_STATE["bomb"] = new_bomb
-                GAME_STATE["used_bombs"].add(new_bomb)
-                break
-        GAME_STATE["min"], GAME_STATE["max"] = 1, 100
-        log_msg += f"\n🔄 **安全壁垒紧急重置！** 全新爆破芯片已暗中激活，**安全防线恢复至：`1 ~ 100`**！杀戮继续！"
-        
-        # 上帝视角特权：将新一局的隐藏炸弹继续私信通知管理员
-        try:
-            await context.bot.send_message(chat_id=ADMIN_ID, text=f"👁‍🗨 【上帝提示】血流成河！战场重置，本轮全新的危险炸弹已更新为：`{GAME_STATE['bomb']}`")
-        except: pass
-    else:
-        # 自动缩短范围
-        if guess < bomb:
-            GAME_STATE["min"] = guess
+    current_player = GAME_STATE["players"][GAME_STATE["turn_idx"]]
+
+    # 严格检验：是否是当前轮到的玩家在说话
+    if user_id != current_player["uid"]:
+        # 非法插嘴惩罚（可选：这里选择直接无视或提示，不惩罚HP）
+        return
+
+    # 验证输入数字是否在合法边界内
+    if guess <= GAME_STATE["min"] or guess >= GAME_STATE["max"]:
+        await update.message.reply_text(
+            f"❌ 愚蠢的错误！请输入范围 **{GAME_STATE['min']} ~ {GAME_STATE['max']}** 之间的数字！"
+        )
+        return
+
+    chat_id = update.effective_chat.id
+
+    # 情况 A：踩中炸弹 💥
+    if guess == GAME_STATE["bomb"]:
+        current_player["hp"] -= 1
+        await update.message.reply_text(
+            f"💥💥 **轰！！！你引爆了数字炸弹【{GAME_STATE['bomb']}】！** 💥💥\n"
+            f"💀 玩家【{current_player['name']}】受到致命反噬，扣除 1 点生命值！\n"
+            f"🩸 剩余生命值： ❤️ **{current_player['hp']} / 3**"
+        )
+
+        # 检查该玩家是否彻底死亡
+        if current_player["hp"] <= 0:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"☠️ **【神罚降临】玩家 {current_player['num_id']}号【{current_player['name']}】生命值归零，被无情抹杀！**"
+            )
+            # 从赛场中剔除
+            GAME_STATE["players"].remove(current_player)
+            
+            # 游戏终局判定
+            if len(GAME_STATE["players"]) <= 1:
+                if len(GAME_STATE["players"]) == 1:
+                    winner = GAME_STATE["players"][0]
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"🏆🏆 **杀戮结束！最后的幸存者诞生：** 🏆🏆\n"
+                             f"👑 恭喜玩家 **{winner['num_id']}号【{winner['name']}】** 成功逃出升天！生存至最后！"
+                    )
+                else:
+                    await context.bot.send_message(chat_id=chat_id, text=f"☠️ 战况惨烈！所有人同归于尽，没有幸存者！")
+                
+                reset_game()
+                return
+            
+            # 如果没结束，因为删除了元素，指针不需要前移，直接缩进到下一个
+            if GAME_STATE["turn_idx"] >= len(GAME_STATE["players"]):
+                GAME_STATE["turn_idx"] = 0
         else:
-            GAME_STATE["max"] = guess
-        log_msg = f"⚡ **咔哒。 虚惊一场！**\n【玩家{player['num_id']}号：{player['name']}】打出的 `{guess}` 擦着火星过关！引信在距离炸弹 0.01 毫米处极限刹车！\n" \
-                  f"🚨 **但包围网已被疯狂绞杀！新的安全天堑区间已暴缩至：`{GAME_STATE['min']} ~ {GAME_STATE['max']}`** ！留给后面人的活路不多了……\n"
+            # 踩中炸弹但没死，数字重置，开启全新一轮炸弹
+            while True:
+                new_bomb = random.randint(2, 99)
+                if new_bomb not in GAME_STATE["used_bombs"]:
+                    GAME_STATE["bomb"] = new_bomb
+                    GAME_STATE["used_bombs"].add(new_bomb)
+                    break
+            
+            # 回合移交给下一个人
+            GAME_STATE["turn_idx"] = (GAME_STATE["turn_idx"] + 1) % len(GAME_STATE["players"])
 
-    # 面板同步
-    log_msg += "\n📊 **当前血量残留看板：**\n"
-    for p in GAME_STATE["players"]:
-        heart = "🩸" * p["hp"] if p["hp"] > 0 else "💀 [已被炸飞抹杀]"
-        log_msg += f"• 玩家{p['num_id']}号：{p['name']} —— {heart} ({p['hp']}/3 HP)\n"
-
-    # 将高压消息更新覆盖为最终惊悚结果
-    await suspense_msg.edit_text(text=log_msg, parse_mode="Markdown")
-
-    # 判定生死大赢家
-    final_alives = [p for p in GAME_STATE["players"] if p["hp"] > 0]
-    if len(final_alives) == 1:
-        winner = final_alives
+        # 重新生成边界
+        GAME_STATE["min"], GAME_STATE["max"] = 1, 100
+        next_player = GAME_STATE["players"][GAME_STATE["turn_idx"]]
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"👑👑 **地狱之门合拢！唯一幸存神王诞生！** 👑👑\n\n"
-                 f"🏆 踩着所有人的尸体，成功死磕到最后的至尊赢家是：\n"
-                 f"👉 🥇 **【玩家{winner['num_id']}号：{winner['name']}】** 🥇\n\n"
-                 f"💀 玩弄人心，精巧拆弹！全群的智商与运气，在这一刻被你彻底踩在脚下！"
+            text=f"🔄 **安全区重置！盲区刷新完毕！**\n"
+                 f"当前数字范围：👉 **{GAME_STATE['min']} ~ {GAME_STATE['max']}** 👈\n"
+                 f"💀 下一位受害者：**{next_player['num_id']}号【{next_player['name']}】** (❤️ HP: {next_player['hp']})"
         )
-        GAME_STATE["status"] = "idle"
-        return
-    elif len(final_alives) == 0:
-        await context.bot.send_message(chat_id=chat_id, text="💀 过于残暴！在最后一轮炼狱冲击中，场上所有人全军覆没，无人幸存！")
-        GAME_STATE["status"] = "idle"
-        return
 
-    # 推进回合：让下一个活着的号码玩家发言
-    GAME_STATE["turn_idx"] += 1
-    next_alive_players = [p for p in GAME_STATE["players"] if p["hp"] > 0]
-    next_player = next_alive_players[GAME_STATE["turn_idx"] % len(next_alive_players)]
-    
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=f"⏳ **下一个受刑者** 👉 **【{next_player['num_id']}号】玩家（{next_player['name']}）** ！请立刻在群里给出你的挣扎数值！否则死神将剥夺你的时间！"
-    )
+    # 情况 B：未踩中炸弹，缩小安全区 📉
+    else:
+        if guess > GAME_STATE["bomb"]:
+            GAME_STATE["max"] = guess
+        else:
+            GAME_STATE["min"] = guess
 
-# 6. 伪装极简网页做健康检查，防止免费服务器断线
-class HealthServer(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
-        self.end_headers()
-        self.wfile.write(b"Bot Running Successfully")
+        # 回合递进
+        GAME_STATE["turn_idx"] = (GAME_STATE["turn_idx"] + 1) % len(GAME_STATE["players"])
+        next_player = GAME_STATE["players"][GAME_STATE["turn_idx"]]
 
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"📉 **避开死线！范围正在向地狱收缩...**\n"
+                 f"当前新范围：👉 **{GAME_STATE['min']} ~ {GAME_STATE['max']}** 👈\n"
+                 f"💀 轮到玩家：**{next_player['num_id']}号【{next_player['name']}】** (❤️ HP: {next_player['hp']})"
+        )
+
+# 6. 用于防止部署到平台（如 Render）因缺少 Web 端口而死机的健康检查
 def run_health_server():
+    class HealthCheckHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthServer)
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-if __name__ == "__main__":
-    threading.Thread(target=run_health_server, daemon=True).start()
-    app = Application.builder().token(BOT_TOKEN).build()
+# 7. 主函数入口
+def main():
+    # 异步开启健康检查 Web 服务
