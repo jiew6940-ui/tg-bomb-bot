@@ -181,7 +181,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 GAME_STATE["used_bombs"].add(new_bomb)
                 break
             if len(GAME_STATE["used_bombs"]) >= 95:
-                GAME_STATE["used_bombs bombs"].clear()
+                GAME_STATE["used_bombs"].clear()
 
         await context.bot.send_message(
             chat_id=GAME_STATE["group_chat_id"],
@@ -287,3 +287,4 @@ def run_http_server():
     server = HTTPServer(('0.0.0.0', 8080), HealthCheckHandler)
     server.serve_forever()
 
+# --- 顺序结构直接运行逻辑 ---
