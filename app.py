@@ -7,9 +7,15 @@ import threading
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-# 1. 核心锁死配置
-BOT_TOKEN = "8990552549:AAHPx1JozcxrEtgyEDzx881w2FQBuhwc9p4"  # 你的 Token
-ADMIN_ID = 8267239773  # 只有你可以运行控制命令
+# 1. 核心安全配置：从 Render 环境变量中动态读取
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID_STR = os.getenv("ADMIN_ID")
+
+# 严密校验环境变量是否存在
+if not BOT_TOKEN or not ADMIN_ID_STR:
+    raise ValueError("❌ 错误：未在 Render 后台检测到 BOT_TOKEN 或 ADMIN_ID 环境变量！请检查配置。")
+
+ADMIN_ID = int(ADMIN_ID_STR)
 RANK_FILE = "leaderboard.json" # 排行榜保存数据文件名
 
 # 游戏状态控制
@@ -40,7 +46,7 @@ def save_winner(user_id, username):
     uid_str = str(user_id)
     if uid_str in data:
         data[uid_str]["wins"] += 1
-        data[uid_str]["name"] = username  # 每次更新一下可能变动的用户名
+        data[uid_str]["name"] = username
     else:
         data[uid_str] = {"name": username, "wins": 1}
     
@@ -54,14 +60,13 @@ async def show_rank(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📊 **【数字炸弹战神榜】**\n\n目前暂无胜场记录，等待首位天选之子诞生！")
         return
     
-    # 按照胜场从大到小排序
     sorted_rank = sorted(data.values(), key=lambda x: x["wins"], reverse=True)
     
     rank_text = "🏆 **【数字炸弹 · 终极战神榜】** 🏆\n"
     rank_text += "━━━━━━━━━━━━━━━━━━\n"
     medals = ["🥇", "🥈", "🥉"]
     
-    for idx, player in enumerate(sorted_rank[:10]): # 只取前10名
+    for idx, player in enumerate(sorted_rank[:10]):
         prefix = medals[idx] if idx < 3 else f"【第{idx+1}名】"
         rank_text += f"{prefix} {player['name']} ——— 胜场 👑 `{player['wins']}`\n"
         
@@ -176,7 +181,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 GAME_STATE["used_bombs"].add(new_bomb)
                 break
             if len(GAME_STATE["used_bombs"]) >= 95:
-                GAME_STATE["used_bombs"].clear()
+                GAME_STATE["used_bombs bombs"].clear()
 
         await context.bot.send_message(
             chat_id=GAME_STATE["group_chat_id"],
@@ -219,7 +224,6 @@ async def handle_player_guess(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"❌ 违规输入！请输入当前范围内的数字 (`{GAME_STATE['min']}` ~ `{GAME_STATE['max']}`之间)！")
         return
 
-    # 情况 A：踩中炸弹直接淘汰
     if guess == GAME_STATE["bomb"]:
         await update.message.reply_text(
             f"💥 **轰！！！** 玩家 【{current_player['num_id']}号】{current_player['name']} 踩中了炸弹数字 【{GAME_STATE['bomb']}】！\n"
@@ -228,11 +232,9 @@ async def handle_player_guess(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         GAME_STATE["players"].pop(GAME_STATE["turn_idx"])
 
-        # 检查游戏是否结束 (只剩最后 1 个人)
         if len(GAME_STATE["players"]) <= 1:
-            winner = GAME_STATE["players"][0] if GAME_STATE["players"] else None
+            winner = GAME_STATE["players"] if GAME_STATE["players"] else None
             if winner:
-                # 🏆 触发排行榜自动统计核心逻辑
                 save_winner(winner["uid"], winner["name"])
                 w_text = f"🏆 **本局最终幸存者是：【{winner['num_id']}号】{winner['name']}**！\n👑 胜场 +1！已被载入至尊战神榜！"
             else:
@@ -264,7 +266,6 @@ async def handle_player_guess(update: Update, context: ContextTypes.DEFAULT_TYPE
         if GAME_STATE["turn_idx"] >= len(GAME_STATE["players"]):
             GAME_STATE["turn_idx"] = 0
 
-    # 情况 B：缩小范围
     else:
         if guess < GAME_STATE["bomb"]:
             GAME_STATE["min"] = guess
@@ -286,5 +287,3 @@ def run_http_server():
     server = HTTPServer(('0.0.0.0', 8080), HealthCheckHandler)
     server.serve_forever()
 
-# 主程序入口
-def main():
