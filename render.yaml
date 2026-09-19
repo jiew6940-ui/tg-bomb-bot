@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: tg-bomb-bot
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python app.py  # 确保这里和你的文件名 app.py 一致
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.14
